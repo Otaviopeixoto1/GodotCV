@@ -3,6 +3,8 @@
 #include "resources/colmap/colmap_image_data.h"
 #include "resources/colmap/colmap_resource_list.h"
 
+#include "godot_cpp/classes/array_mesh.hpp"
+#include "godot_cpp/classes/standard_material3d.hpp"
 #include "godot_cpp/classes/resource_saver.hpp"
 
 //
@@ -63,6 +65,8 @@ ColmapImporter::ColmapFileType ColmapImporter::detect_type(const String &filenam
 		return ColmapFileType::CAMERAS;
 	if (stem == "images")
 		return ColmapFileType::IMAGES;
+	if (stem == "points3d")
+		return ColmapFileType::POINT_CLOUD;
 	return ColmapFileType::UNKNOWN;
 }
 
@@ -102,6 +106,8 @@ Error ColmapImporter::_import(const String &source_file, const String &save_path
 			return import_cameras(f, save_path);
 		case ColmapFileType::IMAGES:
 			return import_images(f, save_path);
+		case ColmapFileType::POINT_CLOUD:
+			return import_point_cloud(f, save_path);
 		default:
 			return ERR_BUG; // unreachable
 	}
@@ -183,6 +189,52 @@ Error ColmapImporter::import_images(Ref<FileAccess> &f, const String &save_path)
 	list->set_items(items);
 
 	return ResourceSaver::get_singleton()->save(list, save_path + String(".") + _get_save_extension());
+}
+
+Error ColmapImporter::import_point_cloud(Ref<FileAccess> &f, const String &save_path) const
+{
+	uint64_t count = f->get_64();
+
+	PackedVector3Array positions;
+	PackedColorArray colors;
+
+	positions.resize((int)count);
+	colors.resize((int)count);
+
+	for (uint64_t i = 0; i < count; i++)
+	{
+		f->get_64(); // skip point3D_id --------> TODO: ALLOW TO IDENTIFY IMAGES TO POINTS
+
+		double x = read_f64(f), y = read_f64(f), z = read_f64(f);
+		positions[(int)i] = Vector3((real_t)x, (real_t)y, (real_t)z);
+
+		uint8_t r = f->get_8(), g = f->get_8(), b = f->get_8();
+		colors[(int)i] = Color(r / 255.0f, g / 255.0f, b / 255.0f);
+
+		f->get_64(); // skip error (maybe load this as well ???)
+
+		uint64_t track_len = f->get_64();
+		f->seek(f->get_position() + track_len * 8);
+	}
+
+	Array arrays;
+	arrays.resize(ArrayMesh::ARRAY_MAX);
+	arrays[ArrayMesh::ARRAY_VERTEX] = positions;
+	arrays[ArrayMesh::ARRAY_COLOR] = colors;
+
+	Ref<StandardMaterial3D> mat;
+	mat.instantiate();
+	mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+	mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+	mat->set_flag(BaseMaterial3D::FLAG_USE_POINT_SIZE, true);
+	mat->set_point_size(2.0f);
+
+	Ref<ArrayMesh> mesh;
+	mesh.instantiate();
+	mesh->add_surface_from_arrays(Mesh::PRIMITIVE_POINTS, arrays);
+	mesh->surface_set_material(0, mat);
+
+	return ResourceSaver::get_singleton()->save(mesh, save_path + String(".") + _get_save_extension());
 }
 
 

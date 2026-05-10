@@ -14,13 +14,15 @@ using namespace godot;
 class CVCamera : public Camera3D
 {
 	GDCLASS(CVCamera, Camera3D)
-
+		
 protected:
 	static void _bind_methods();
 
 public:
 	CVCamera() = default;
 	~CVCamera() override = default;
+
+	//Add the a data property: allow to bind camera data from colmap
 
 	void _ready() override;
 };

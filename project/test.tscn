@@ -1,5 +1,10 @@
 [gd_scene format=3 uid="uid://dh0oj81pufivs"]
 
+[ext_resource type="ArrayMesh" uid="uid://bvmhy65m8svas" path="res://example_colmap/sparse/0/points3D.bin" id="1_37kl0"]
+
 [node name="Test" type="Node3D" unique_id=373362943]
 
 [node name="CVCamera" type="CVCamera" parent="." unique_id=1527434049]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=382322252]
+mesh = ExtResource("1_37kl0")

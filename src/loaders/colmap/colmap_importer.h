@@ -13,11 +13,13 @@ class ColmapImporter : public EditorImportPlugin
 
 	Error import_cameras(Ref<FileAccess> &f, const String &save_path) const;
 	Error import_images(Ref<FileAccess> &f, const String &save_path) const;
+	Error import_point_cloud(Ref<FileAccess> &f, const String &save_path) const;
 
 public:
 	enum class ColmapFileType {
 		CAMERAS,
 		IMAGES,
+		POINT_CLOUD,
 		UNKNOWN
 	};
 

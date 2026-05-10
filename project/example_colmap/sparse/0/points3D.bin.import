@@ -3,11 +3,12 @@
 importer="colmap.bin"
 type="Resource"
 uid="uid://bvmhy65m8svas"
-valid=false
+path="res://.godot/imported/points3D.bin-1d4abed37901c49b774d0736d878bd6c.res"
 
 [deps]
 
 source_file="res://example_colmap/sparse/0/points3D.bin"
+dest_files=["res://.godot/imported/points3D.bin-1d4abed37901c49b774d0736d878bd6c.res"]
 
 [params]
 

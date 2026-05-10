@@ -40,7 +40,10 @@ env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
 env.Append(CPPPATH=["src/"])
 
-sources = Glob("src/*.cpp") + Glob("src/loaders/*.cpp") + Glob("src/loaders/colmap/*.cpp") + Glob("src/resources/*.cpp") + Glob("src/resources/colmap/*.cpp")
+sourcePaths = ["src/*.cpp", "src/loaders/*.cpp", "src/loaders/colmap/*.cpp", "src/resources/*.cpp", "src/resources/colmap/*.cpp"]
+sources = []
+for path in sourcePaths:
+    sources.append(Glob(path))
 
 if env["target"] in ["editor", "template_debug"]:
     try:
