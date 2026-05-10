@@ -206,7 +206,7 @@ Error ColmapImporter::import_point_cloud(Ref<FileAccess> &f, const String &save_
 		f->get_64(); // skip point3D_id --------> TODO: ALLOW TO IDENTIFY IMAGES TO POINTS
 
 		double x = read_f64(f), y = read_f64(f), z = read_f64(f);
-		positions[(int)i] = Vector3((real_t)x, (real_t)y, (real_t)z);
+		positions[(int)i] = Vector3((real_t)-x, (real_t)-y, (real_t)z);
 
 		uint8_t r = f->get_8(), g = f->get_8(), b = f->get_8();
 		colors[(int)i] = Color(r / 255.0f, g / 255.0f, b / 255.0f);

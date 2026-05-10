@@ -9,20 +9,19 @@ width = 1024
 height = 1024
 params = PackedFloat64Array(886.1963859682709, 512, 512, -0.09865591080226552)
 
-[sub_resource type="ColmapImageData" id="ColmapImageData_mop1t"]
-id = 3
+[sub_resource type="ColmapImageData" id="ColmapImageData_kew5c"]
+id = 4
 camera_id = 1
-name = "0000_cam02.png"
-rotation = Quaternion(-0.04757086, -0.015778195, -0.02437813, 0.9984457)
-translation = Vector3(2.1796849, -0.24080461, 0.5934669)
+name = "0000_cam03.png"
+rotation = Quaternion(-0.054163676, -0.045410924, -0.030348834, 0.9970372)
+translation = Vector3(4.620218, 0.26138303, 0.66519135)
 
 [node name="Test" type="Node3D" unique_id=373362943]
-transform = Transform3D(-1, 8.742278e-08, 0, -8.742278e-08, -1, 0, 0, 0, 1, 0, 0, 0)
 
 [node name="CVCamera" type="CVCamera" parent="." unique_id=1527434049]
 colmap_camera_data = SubResource("ColmapCameraData_escub")
-colmap_image_data = SubResource("ColmapImageData_mop1t")
-transform = Transform3D(-0.9983135, 0.047179397, -0.033826727, 0.050181728, 0.99428546, -0.09422455, 0.029187966, -0.095763125, -0.9949761, 2.2074447, 0.18596731, 0.50380456)
+colmap_image_data = SubResource("ColmapImageData_kew5c")
+transform = Transform3D(0.9940336, -0.055598583, 0.09384036, 0.06543707, 0.9922905, -0.10525006, 0.08726515, -0.11076273, -0.9900083, -4.640541, -0.49168998, 0.28431246)
 fov = 60.03435
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=382322252]

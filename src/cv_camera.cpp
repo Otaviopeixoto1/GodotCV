@@ -64,7 +64,7 @@ void CVCamera::apply_extrinsics()
 
 	static const Basis colmap_to_godot(
 			Vector3(1, 0, 0), // X stays
-			Vector3(0, -1, 0), // Y flips
+			Vector3(0, 1, 0), // Y flips
 			Vector3(0, 0, -1) // Z flips
 	);
 
