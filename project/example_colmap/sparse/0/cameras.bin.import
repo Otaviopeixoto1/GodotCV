@@ -1,0 +1,14 @@
+[remap]
+
+importer="colmap.bin"
+type="Resource"
+uid="uid://bub30ocqj3gmv"
+path="res://.godot/imported/cameras.bin-8deb2ede758f1a92f642b855dfc42aa0.res"
+
+[deps]
+
+source_file="res://example_colmap/sparse/0/cameras.bin"
+dest_files=["res://.godot/imported/cameras.bin-8deb2ede758f1a92f642b855dfc42aa0.res"]
+
+[params]
+

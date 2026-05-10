@@ -1,0 +1,13 @@
+[remap]
+
+importer="colmap.bin"
+type="Resource"
+uid="uid://bkq4jst70cm3j"
+valid=false
+
+[deps]
+
+source_file="res://example_colmap/sparse/0/frames.bin"
+
+[params]
+

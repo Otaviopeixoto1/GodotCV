@@ -51,7 +51,9 @@ target_sources(${LIBNAME}
     src/register_types.h
     "src/cv_camera.cpp"
     "src/cv_camera.h"
-)
+    
+    "src/resources/colmap/colmap_image_data.cpp"
+    "src/resources/colmap/colmap_resource_list.h" "src/resources/colmap/colmap_resource_list.cpp" "src/resources/colmap/colmap_image_data.h" "src/resources/colmap/colmap_camera_data.h" "src/resources/colmap/colmap_camera_data.cpp" "src/loaders/colmap/colmap_importer.h" "src/loaders/colmap/colmap_importer.cpp" "src/colmap_editor_plugin.h" "src/colmap_editor_plugin.cpp")
 
 # Fetch a list of the xml files to use for documentation and add to our target
 file(GLOB_RECURSE DOC_XML LIST_DIRECTORIES NO CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/doc_classes/*.xml")

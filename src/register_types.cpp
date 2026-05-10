@@ -1,24 +1,42 @@
 #include "register_types.h"
 
 #include <gdextension_interface.h>
-#include <godot_cpp/core/class_db.hpp>
-#include <godot_cpp/core/defs.hpp>
-#include <godot_cpp/godot.hpp>
+#include "godot_cpp/core/class_db.hpp"
+#include "godot_cpp/core/defs.hpp"
+#include "godot_cpp/godot.hpp"
+#include "godot_cpp/classes/editor_plugin_registration.hpp"
 
 #include "cv_camera.h"
+#include "resources/colmap/colmap_camera_data.h"
+#include "resources/colmap/colmap_image_data.h"
+#include "resources/colmap/colmap_resource_list.h"
+#include "loaders/colmap/colmap_importer.h"
+#include "colmap_editor_plugin.h"
 
 using namespace godot;
 
 void initialize_gdextension_types(ModuleInitializationLevel p_level)
 {
-	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
-		return;
+	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE)
+	{
+		GDREGISTER_CLASS(CVCamera);
+		GDREGISTER_CLASS(ColmapCameraData);
+		GDREGISTER_CLASS(ColmapImageData);
+		GDREGISTER_CLASS(ColmapResourceList);
 	}
-	GDREGISTER_CLASS(CVCamera);
+	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR)
+	{
+		ClassDB::register_class<ColmapImporter>();
+		ClassDB::register_class<ColmapEditorPlugin>();
+
+		EditorPlugins::add_by_type<ColmapEditorPlugin>();
+	}
 }
 
-void uninitialize_gdextension_types(ModuleInitializationLevel p_level) {
-	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
+void uninitialize_gdextension_types(ModuleInitializationLevel p_level)
+{
+	if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE)
+	{
 		return;
 	}
 }

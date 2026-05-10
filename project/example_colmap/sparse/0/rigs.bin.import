@@ -1,0 +1,13 @@
+[remap]
+
+importer="colmap.bin"
+type="Resource"
+uid="uid://cbwybt0mkloyb"
+valid=false
+
+[deps]
+
+source_file="res://example_colmap/sparse/0/rigs.bin"
+
+[params]
+

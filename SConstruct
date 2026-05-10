@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+import fnmatch
 import sys
 
 from methods import print_error
@@ -38,7 +39,8 @@ Run the following command to download godot-cpp:
 env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
 env.Append(CPPPATH=["src/"])
-sources = Glob("src/*.cpp")
+
+sources = Glob("src/*.cpp") + Glob("src/loaders/*.cpp") + Glob("src/loaders/colmap/*.cpp") + Glob("src/resources/*.cpp") + Glob("src/resources/colmap/*.cpp")
 
 if env["target"] in ["editor", "template_debug"]:
     try:
