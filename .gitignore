@@ -29,6 +29,7 @@ compile_commands.json
 /src/gen
 
 # Binaries
+*.dll
 *.o
 *.os
 *.so
@@ -54,12 +55,13 @@ compile_commands.json
 !.vscode/extensions.json
 .DS_Store
 
+# MSVS
+.vs
+out
+
 # Jetbrains
 .idea/
 
 # Cmake
 cmake-build*
 CMakeUserPresets.json
-
-.vs
-out/

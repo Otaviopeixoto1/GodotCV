@@ -5,7 +5,7 @@ import sys
 from methods import print_error
 
 
-libname = "EXTENSION-NAME"
+libname = "GodotCV"
 projectdir = "project"
 
 localEnv = Environment(tools=["default"], PLATFORM="")
