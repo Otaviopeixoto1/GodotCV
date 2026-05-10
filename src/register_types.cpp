@@ -8,6 +8,7 @@
 
 #include "cv_camera.h"
 #include "resources/colmap/colmap_camera_data.h"
+#include "resources/colmap/colmap_point_cloud.h"
 #include "resources/colmap/colmap_image_data.h"
 #include "resources/colmap/colmap_resource_list.h"
 #include "loaders/colmap/colmap_importer.h"
@@ -20,6 +21,7 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level)
 	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE)
 	{
 		GDREGISTER_CLASS(CVCamera);
+		GDREGISTER_CLASS(ColmapPointCloud);
 		GDREGISTER_CLASS(ColmapCameraData);
 		GDREGISTER_CLASS(ColmapImageData);
 		GDREGISTER_CLASS(ColmapResourceList);
