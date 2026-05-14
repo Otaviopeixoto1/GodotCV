@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 import os
 import sys
+import re
 import subprocess
+from pathlib import Path
 from methods import print_error
 
 
@@ -10,45 +12,34 @@ projectdir = "project"
 
 localEnv = Environment(tools=["default"], PLATFORM="")
 
-# Build profiles can be used to decrease compile times.
-# You can either specify "disabled_classes", OR
-# explicitly specify "enabled_classes" which disables all other classes.
-# Modify the example file as needed and uncomment the line below or
-# manually specify the build_profile parameter when running SCons.
-
-# localEnv["build_profile"] = "build_profile.json"
-
 customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
 
 opts = Variables(customs, ARGUMENTS)
-# OpenCV optional build args:
-opts.Add(BoolVariable("use_cuda", "Enable CUDA support in OpenCV",  False))
-opts.Add(BoolVariable("use_contrib", "Build opencv_contrib modules",   False))
-opts.Add(PathVariable("cuda_path", "Path to CUDA toolkit", "/usr/local/cuda", PathVariable.PathIsDir))
+opts.Add(BoolVariable("build_deps",   "Build OpenCV before building the extension", False))
+opts.Add(BoolVariable("use_cuda",     "Enable CUDA support in OpenCV",              False))
+opts.Add(BoolVariable("use_contrib",  "Build opencv_contrib modules",               False))
+opts.Add(PathVariable("cuda_path",    "Path to CUDA toolkit", "/usr/local/cuda", PathVariable.PathAccept))
 opts.Add("cuda_arch_bin", "CUDA compute capabilities (e.g. '8.6;8.9')", "8.6")
 opts.Update(localEnv)
 
 Help(opts.GenerateHelpText(localEnv))
 
-#
-# Setup dependencies ---------------> TODO: make it optional to use these. Allow the user to set the path to dependencies
-#
-
-# OpenCV:
+build_deps  = localEnv["build_deps"]
 use_cuda    = localEnv["use_cuda"]
 use_contrib = localEnv["use_contrib"]
 cuda_path   = localEnv["cuda_path"]
-cuda_arch   = localEnv["cuda_arch_bin"] # check if this HAS TO match exactly the installed cuda version...
+cuda_arch   = localEnv["cuda_arch_bin"]
 
+OPENCV_SRC           = Dir("opencv").abspath
+CONTRIB_SRC          = Dir("opencv_contrib").abspath
+flavour              = "cuda" if use_cuda else "cpu"
+OPENCV_BUILD_DIR     = Dir(f"bin/opencv_{flavour}").abspath
+OPENCV_INSTALL_DIR   = Dir(f"thirdparty/opencv_{flavour}").abspath
+OPENCV_SENTINEL      = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVConfig.cmake")
+OPENCV_MODULES_CMAKE = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVModules-release.cmake")
 
-OPENCV_SRC = Dir("opencv").abspath
-CONTRIB_SRC = Dir("opencv_contrib").abspath
-
-flavour = "cuda" if use_cuda else "cpu"
-OPENCV_BUILD_DIR = Dir(f"bin/opencv_{flavour}").abspath
-OPENCV_INSTALL_DIR = Dir(f"thirdparty/opencv_{flavour}").abspath
-
+# OpenCV build
 def build_opencv(target, source, env):
     os.makedirs(OPENCV_BUILD_DIR, exist_ok=True)
 
@@ -57,16 +48,14 @@ def build_opencv(target, source, env):
         f"-B{OPENCV_BUILD_DIR}",
         "-DCMAKE_BUILD_TYPE=Release",
         f"-DCMAKE_INSTALL_PREFIX={OPENCV_INSTALL_DIR}",
-
-        # Keep the build small, only install what the extension needs
         "-DBUILD_LIST=core,imgproc,imgcodecs,videoio,dnn,calib3d",
-        "-DBUILD_SHARED_LIBS=OFF", # Build static lib
+        "-DBUILD_SHARED_LIBS=OFF",
         "-DBUILD_TESTS=OFF",
         "-DBUILD_PERF_TESTS=OFF",
         "-DBUILD_EXAMPLES=OFF",
         "-DBUILD_opencv_python3=OFF",
         "-DBUILD_opencv_python_bindings_generator=OFF",
-        "-DWITH_GTK=OFF", # Headless. Godot handles the window
+        "-DWITH_GTK=OFF",
         "-DWITH_FFMPEG=ON",
         "-DWITH_V4L=ON",
     ]
@@ -94,63 +83,147 @@ def build_opencv(target, source, env):
     subprocess.check_call(cmake_args)
 
     jobs = os.cpu_count() or 4
-    print("Building & installing OpenCV... #cores = " + jobs)
+    print(f"Building & installing OpenCV... #cores = {jobs}")  # fix: was str concat on int
     subprocess.check_call([
-        "cmake",
-        "--build", OPENCV_BUILD_DIR,
+        "cmake", "--build", OPENCV_BUILD_DIR,
         "--target", "install",
         "--parallel", str(jobs),
     ])
 
+# OpenCV cmake parser
+def parse_opencv_modules_cmake(cmake_file):
+    text = Path(cmake_file).read_text()
 
-# Sentinel file: SCons only re-runs build_opencv when it is missing.
-opencv_sentinel = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVConfig.cmake")
-opencv_built = env.Command(
-    target = opencv_sentinel,
-    source = [os.path.join(OPENCV_SRC, "CMakeLists.txt")],
-    action = build_opencv,
-)
-env.AlwaysBuild(opencv_built)   # let SCons track the sentinel for diffs
+    lib_paths = re.findall(r'IMPORTED_LOCATION_RELEASE\s+"([^"]+)"', text)
+    lib_dirs  = sorted({os.path.dirname(p) for p in lib_paths})
+    lib_names = []
+    for p in lib_paths:
+        name = os.path.basename(p)
+        name = re.sub(r'^lib', '', name)
+        name = re.sub(r'\.(a|lib)$', '', name)
+        lib_names.append(name)
 
-opencv_inc  = os.path.join(OPENCV_INSTALL_DIR, "include", "opencv4")
-opencv_lib_dir = os.path.join(OPENCV_INSTALL_DIR, "lib")
-opencv_libs_3rdparty = os.path.join(OPENCV_INSTALL_DIR, "lib", "opencv4", "3rdparty")
+    inc_raw  = re.findall(r'INTERFACE_INCLUDE_DIRECTORIES\s+"([^"]+)"', text)
+    includes = sorted({inc for m in inc_raw for inc in m.split(";") if inc})
 
-env = localEnv.Clone()
+    extra_dirs = []
+    for lib_dir in lib_dirs:
+        for candidate in [
+            os.path.join(lib_dir, "opencv4", "3rdparty"),
+            os.path.join(lib_dir, "staticlib"),
+        ]:
+            if os.path.isdir(candidate) and candidate not in extra_dirs:
+                extra_dirs.append(candidate)
 
-#ADD LIB IMPORT HERE
+    return includes, lib_dirs + extra_dirs, lib_names
 
-if not (os.path.isdir("godot-cpp") and os.listdir("godot-cpp")):
-    print_error("""godot-cpp is not available within this folder, as Git submodules haven't been initialized.
-Run the following command to download godot-cpp:
+def get_opencv_3rdparty_libs(lib_dirs):
+    opencv_mod = re.compile(r'^opencv_')
+    libs = []
+    for d in lib_dirs:
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            m = re.match(r'^(?:lib)?(.+?)(?:\.a|\.lib)$', f)
+            if m and not opencv_mod.match(m.group(1)):
+                name = m.group(1)
+                if name not in libs:
+                    libs.append(name)
+    return libs
 
-    git submodule update --init --recursive""")
-    sys.exit(1)
+if build_deps:
+    print(f"Building OpenCV [{flavour}] into {OPENCV_INSTALL_DIR}")
 
-env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
+    if not os.path.isdir(OPENCV_SRC) or not os.listdir(OPENCV_SRC):
+        print_error(
+            "opencv submodule is missing.\n"
+            "Run:  git submodule update --init --recursive"
+        )
+        sys.exit(1)
 
-env.Append(CPPPATH=["src/"])
-sources = Glob("src/*.cpp")
+    opencv_built = localEnv.Command(
+        target = OPENCV_SENTINEL,
+        source = os.path.join(OPENCV_SRC, "CMakeLists.txt"),
+        action = build_opencv,
+    )
+    localEnv.AlwaysBuild(opencv_built)
+    Default(opencv_built)
 
-if env["target"] in ["editor", "template_debug"]:
-    try:
-        doc_data = env.GodotCPPDocData("src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml"))
-        sources.append(doc_data)
-    except AttributeError:
-        print("Not including class reference as we're targeting a pre-4.3 baseline.")
+else:
+    if not os.path.isfile(OPENCV_MODULES_CMAKE):
+        print_error(
+            f"OpenCV [{flavour}] has not been built yet.\n"
+            "Build it first with:\n\n"
+            "    scons build_deps=yes"
+            + (" use_cuda=yes" if use_cuda else "")
+            + (" use_contrib=yes" if use_contrib else "")
+            + (f" cuda_arch_bin={cuda_arch}" if use_cuda else "")
+            + "\n"
+        )
+        sys.exit(1)
 
-# .dev doesn't inhibit compatibility, so we don't need to key it.
-# .universal just means "compatible with all relevant arches" so we don't need to key it.
-suffix = env['suffix'].replace(".dev", "").replace(".universal", "")
+    if not (os.path.isdir("godot-cpp") and os.listdir("godot-cpp")):
+        print_error(
+            "godot-cpp is not available within this folder, as Git submodules haven't been initialized.\n"
+            "Run the following command to download godot-cpp:\n\n"
+            "    git submodule update --init --recursive"
+        )
+        sys.exit(1)
 
-lib_filename = "{}{}{}{}".format(env.subst('$SHLIBPREFIX'), libname, suffix, env.subst('$SHLIBSUFFIX'))
+    env = localEnv.Clone()
+    env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
-library = env.SharedLibrary(
-    "bin/{}/{}".format(env['platform'], lib_filename),
-    source=sources,
-)
+    # Link OpenCV
+    cv_includes, cv_libdirs, cv_libs = parse_opencv_modules_cmake(Path(OPENCV_MODULES_CMAKE))
+    extra_dirs  = [d for d in cv_libdirs if "3rdparty" in d or "staticlib" in d]
+    cv_3rd_libs = get_opencv_3rdparty_libs(extra_dirs)
+    print(f"[OpenCV] modules={len(cv_libs)}  3rdparty={len(cv_3rd_libs)}  cuda={use_cuda}")
 
-copy = env.Install("{}/bin/{}/".format(projectdir, env["platform"]), library)
+    env.Append(CPPPATH = cv_includes)
+    env.Append(LIBPATH = cv_libdirs)
+    env.Append(LIBS = cv_libs + cv_3rd_libs)
 
-default_args = [library, copy]
-Default(*default_args)
+    # Platform system libs
+    if sys.platform.startswith("linux"):
+        env["_LIBFLAGS"] = "-Wl,--start-group " + env.get("_LIBFLAGS", "") + " -Wl,--end-group"
+        env.Append(LIBS=["pthread", "dl", "m", "z", "rt"])
+    elif sys.platform == "darwin":
+        env.Append(FRAMEWORKS=[
+            "CoreFoundation", "AVFoundation",
+            "CoreMedia", "CoreVideo", "Accelerate",
+        ])
+        env.Append(LIBS=["m", "z"])
+    elif sys.platform == "win32":
+        env.Append(LIBS=[
+            "ws2_32", "comctl32", "gdi32",
+            "ole32", "setupapi", "vfw32",
+        ])
+
+    if use_cuda:
+        env.Append(CPPDEFINES=["WITH_CUDA"])
+        env.Append(LIBPATH=[os.path.join(cuda_path, "lib64")])
+        env.Append(LIBS=["cudart", "cublas", "cudnn"])
+
+    # Extension sources
+    env.Append(CPPPATH=["src/"])
+    sources = Glob("src/*.cpp")
+
+    if env["target"] in ["editor", "template_debug"]:
+        try:
+            doc_data = env.GodotCPPDocData("src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml"))
+            sources.append(doc_data)
+        except AttributeError:
+            print("Not including class reference as we're targeting a pre-4.3 baseline.")
+
+    suffix = env['suffix'].replace(".dev", "").replace(".universal", "")
+    lib_filename = "{}{}{}{}".format(env.subst('$SHLIBPREFIX'), libname, suffix, env.subst('$SHLIBSUFFIX'))
+
+    library = env.SharedLibrary(
+        "bin/{}/{}".format(env['platform'], lib_filename),
+        source=sources,
+    )
+
+    copy = env.Install("{}/bin/{}/".format(projectdir, env["platform"]), library)
+
+    default_args = [library, copy]
+    Default(*default_args)
