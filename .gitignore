@@ -19,6 +19,10 @@ project/bin/windows/*
 !project/bin/*.gdextension
 .sconsign*.dblite
 
+bin/opencv_cpu
+bin/opencv_gpu
+thirdparty
+
 # Ignore custom.py
 custom.py
 
