@@ -31,13 +31,19 @@ use_contrib = localEnv["use_contrib"]
 cuda_path   = localEnv["cuda_path"]
 cuda_arch   = localEnv["cuda_arch_bin"]
 
+# OpenCV paths:
 OPENCV_SRC           = Dir("opencv").abspath
 CONTRIB_SRC          = Dir("opencv_contrib").abspath
 flavour              = "cuda" if use_cuda else "cpu"
 OPENCV_BUILD_DIR     = Dir(f"bin/opencv_{flavour}").abspath
 OPENCV_INSTALL_DIR   = Dir(f"thirdparty/opencv_{flavour}").abspath
-OPENCV_SENTINEL      = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVConfig.cmake")
-OPENCV_MODULES_CMAKE = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVModules-release.cmake")
+
+if sys.platform == "win32":
+    OPENCV_SENTINEL      = os.path.join(OPENCV_INSTALL_DIR, "OpenCVConfig.cmake")
+    OPENCV_MODULES_CMAKE = os.path.join(OPENCV_INSTALL_DIR, "OpenCVModules-release.cmake")
+else:
+    OPENCV_SENTINEL      = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVConfig.cmake")
+    OPENCV_MODULES_CMAKE = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVModules-release.cmake")
 
 # OpenCV build
 def build_opencv(target, source, env):
@@ -56,66 +62,117 @@ def build_opencv(target, source, env):
         "-DBUILD_opencv_python3=OFF",
         "-DBUILD_opencv_python_bindings_generator=OFF",
         "-DWITH_GTK=OFF",
-        "-DWITH_FFMPEG=ON",
-        "-DWITH_V4L=ON",
     ]
+
+    # Platform-specific flags
+    if sys.platform.startswith("linux"):
+        cmake_args += ["-DWITH_FFMPEG=ON", "-DWITH_V4L=ON", "-DWITH_GSTREAMER=ON"]
+    elif sys.platform == "darwin":
+        cmake_args += ["-DWITH_FFMPEG=ON", "-DWITH_AVFOUNDATION=ON"]
+    elif sys.platform == "win32":
+        cmake_args += [
+            "-DWITH_FFMPEG=ON",
+            "-DWITH_MSMF=ON",
+            "-DWITH_DSHOW=ON",
+            "-DCMAKE_CONFIGURATION_TYPES=Release",  # configure step: restrict to Release only
+        ]
 
     if use_contrib:
         cmake_args.append(f"-DOPENCV_EXTRA_MODULES_PATH={CONTRIB_SRC}/modules")
 
     if use_cuda:
         cmake_args += [
-            "-DWITH_CUDA=ON",
-            "-DWITH_CUDNN=ON",
-            "-DOPENCV_DNN_CUDA=ON",
-            "-DCUDA_FAST_MATH=ON",
+            "-DWITH_CUDA=ON", "-DWITH_CUDNN=ON",
+            "-DOPENCV_DNN_CUDA=ON", "-DCUDA_FAST_MATH=ON",
             f"-DCUDA_TOOLKIT_ROOT_DIR={cuda_path}",
             f"-DCUDA_ARCH_BIN={cuda_arch}",
             "-DWITH_CUBLAS=ON",
         ]
     else:
-        cmake_args += [
-            "-DWITH_CUDA=OFF",
-            "-DWITH_CUDNN=OFF",
-        ]
+        cmake_args += ["-DWITH_CUDA=OFF", "-DWITH_CUDNN=OFF"]
 
     print("Configuring OpenCV...")
-    subprocess.check_call(cmake_args)
+    ret = subprocess.call(cmake_args)
+    if ret != 0:
+        print_error(f"CMake configuration failed with exit code {ret}")
+        return ret
 
     jobs = os.cpu_count() or 4
-    print(f"Building & installing OpenCV... #cores = {jobs}")  # fix: was str concat on int
-    subprocess.check_call([
+    print(f"Building & installing OpenCV... #cores = {jobs}")
+
+    # --config Release goes here (build step only), not in cmake_args above
+    build_cmd = [
         "cmake", "--build", OPENCV_BUILD_DIR,
         "--target", "install",
         "--parallel", str(jobs),
-    ])
+    ]
+    if sys.platform == "win32":
+        build_cmd += ["--config", "Release"]
+
+    ret = subprocess.call(build_cmd)
+    if ret != 0:
+        print_error(f"CMake build failed with exit code {ret}")
+        return ret
+
+    return 0
 
 # OpenCV cmake parser
-def parse_opencv_modules_cmake(cmake_file):
+def parse_opencv_modules_cmake(cmake_file, build_type="release"):
     text = Path(cmake_file).read_text()
 
-    lib_paths = re.findall(r'IMPORTED_LOCATION_RELEASE\s+"([^"]+)"', text)
+    location_key = "RELEASE" if build_type == "release" else "DEBUG"
+    lib_paths = re.findall(
+        rf'IMPORTED_LOCATION_{location_key}\s+"([^"]+)"', text)
+
     lib_dirs  = sorted({os.path.dirname(p) for p in lib_paths})
     lib_names = []
     for p in lib_paths:
         name = os.path.basename(p)
-        name = re.sub(r'^lib', '', name)
-        name = re.sub(r'\.(a|lib)$', '', name)
+        name = re.sub(r'^lib', '', name)          # Linux/macOS: strip 'lib' prefix
+        name = re.sub(r'\.(a|lib)$', '', name)    # strip extension
         lib_names.append(name)
 
     inc_raw  = re.findall(r'INTERFACE_INCLUDE_DIRECTORIES\s+"([^"]+)"', text)
     includes = sorted({inc for m in inc_raw for inc in m.split(";") if inc})
 
+    # 3rdparty libs live alongside the opencv libs in the same dir on Windows,
+    # and in a sibling '3rdparty' subdir on Linux/macOS
     extra_dirs = []
     for lib_dir in lib_dirs:
         for candidate in [
-            os.path.join(lib_dir, "opencv4", "3rdparty"),
-            os.path.join(lib_dir, "staticlib"),
+            lib_dir,                                                  # Windows: same dir
+            os.path.join(lib_dir, "opencv4", "3rdparty"),            # Linux/macOS
         ]:
             if os.path.isdir(candidate) and candidate not in extra_dirs:
                 extra_dirs.append(candidate)
 
     return includes, lib_dirs + extra_dirs, lib_names
+
+def find_opencv_modules_cmake(install_dir):
+    candidates = [
+        # Linux / macOS
+        os.path.join(install_dir, "lib", "cmake", "opencv4", "OpenCVModules-release.cmake"),
+        os.path.join(install_dir, "share", "opencv4", "OpenCVModules-release.cmake"),
+        # Windows MSVC - everything is flat in staticlib
+        os.path.join(install_dir, "x64", "vc17", "staticlib", "OpenCVModules-release.cmake"),
+        os.path.join(install_dir, "x64", "vc16", "staticlib", "OpenCVModules-release.cmake"),
+    ]
+    debug_candidates = [
+        os.path.join(install_dir, "lib", "cmake", "opencv4", "OpenCVModules-debug.cmake"),
+        os.path.join(install_dir, "x64", "vc17", "staticlib", "OpenCVModules-debug.cmake"),
+        os.path.join(install_dir, "x64", "vc16", "staticlib", "OpenCVModules-debug.cmake"),
+    ]
+
+    for c in candidates:
+        if os.path.isfile(c):
+            return c, "release"
+    for c in debug_candidates:
+        if os.path.isfile(c):
+            print("[WARN] Only a Debug OpenCV build was found.")
+            print("[WARN] Rebuild with: scons build_deps=yes to get a Release build.")
+            return c, "debug"
+
+    return None, None
 
 def get_opencv_3rdparty_libs(lib_dirs):
     opencv_mod = re.compile(r'^opencv_')
@@ -124,6 +181,7 @@ def get_opencv_3rdparty_libs(lib_dirs):
         if not os.path.isdir(d):
             continue
         for f in sorted(os.listdir(d)):
+            # Linux/macOS: libXXX.a     Windows: XXX.lib
             m = re.match(r'^(?:lib)?(.+?)(?:\.a|\.lib)$', f)
             if m and not opencv_mod.match(m.group(1)):
                 name = m.group(1)
@@ -150,7 +208,9 @@ if build_deps:
     Default(opencv_built)
 
 else:
-    if not os.path.isfile(OPENCV_MODULES_CMAKE):
+    # Re-search at runtime in case it was just built
+    modules_cmake, build_type = find_opencv_modules_cmake(OPENCV_INSTALL_DIR)
+    if modules_cmake is None:
         print_error(
             f"OpenCV [{flavour}] has not been built yet.\n"
             "Build it first with:\n\n"
@@ -161,6 +221,7 @@ else:
             + "\n"
         )
         sys.exit(1)
+
 
     if not (os.path.isdir("godot-cpp") and os.listdir("godot-cpp")):
         print_error(
@@ -174,7 +235,7 @@ else:
     env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
     # Link OpenCV
-    cv_includes, cv_libdirs, cv_libs = parse_opencv_modules_cmake(Path(OPENCV_MODULES_CMAKE))
+    cv_includes, cv_libdirs, cv_libs = parse_opencv_modules_cmake(Path(modules_cmake), build_type)
     extra_dirs  = [d for d in cv_libdirs if "3rdparty" in d or "staticlib" in d]
     cv_3rd_libs = get_opencv_3rdparty_libs(extra_dirs)
     print(f"[OpenCV] modules={len(cv_libs)}  3rdparty={len(cv_3rd_libs)}  cuda={use_cuda}")
