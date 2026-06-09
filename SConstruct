@@ -16,10 +16,11 @@ customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
 
 opts = Variables(customs, ARGUMENTS)
-opts.Add(BoolVariable("build_deps",   "Build OpenCV before building the extension", False))
-opts.Add(BoolVariable("use_cuda",     "Enable CUDA support in OpenCV",              False))
-opts.Add(BoolVariable("use_contrib",  "Build opencv_contrib modules",               False))
-opts.Add(PathVariable("cuda_path",    "Path to CUDA toolkit", "/usr/local/cuda", PathVariable.PathAccept))
+opts.Add(BoolVariable("build_deps",  "Build OpenCV before building the extension", False))
+opts.Add(BoolVariable("use_cuda",    "Enable CUDA support in OpenCV",              False))
+opts.Add(BoolVariable("use_contrib", "Build opencv_contrib modules",               False))
+opts.Add(BoolVariable("compiledb",   "Generate compile_commands.json for IDE",     False))
+opts.Add(PathVariable("cuda_path",   "Path to CUDA toolkit", "/usr/local/cuda",    PathVariable.PathAccept))
 opts.Add("cuda_arch_bin", "CUDA compute capabilities (e.g. '8.6;8.9')", "8.6")
 opts.Update(localEnv)
 
@@ -31,19 +32,20 @@ use_contrib = localEnv["use_contrib"]
 cuda_path   = localEnv["cuda_path"]
 cuda_arch   = localEnv["cuda_arch_bin"]
 
-# OpenCV paths:
-OPENCV_SRC           = Dir("opencv").abspath
-CONTRIB_SRC          = Dir("opencv_contrib").abspath
-flavour              = "cuda" if use_cuda else "cpu"
-OPENCV_BUILD_DIR     = Dir(f"bin/opencv_{flavour}").abspath
-OPENCV_INSTALL_DIR   = Dir(f"thirdparty/opencv_{flavour}").abspath
+# OpenCV paths
+OPENCV_SRC         = Dir("opencv").abspath
+CONTRIB_SRC        = Dir("opencv_contrib").abspath
+flavour            = "cuda" if use_cuda else "cpu"
+OPENCV_BUILD_DIR   = Dir(f"bin/opencv_{flavour}").abspath
+OPENCV_INSTALL_DIR = Dir(f"thirdparty/opencv_{flavour}").abspath
 
-if sys.platform == "win32":
-    OPENCV_SENTINEL      = os.path.join(OPENCV_INSTALL_DIR, "OpenCVConfig.cmake")
-    OPENCV_MODULES_CMAKE = os.path.join(OPENCV_INSTALL_DIR, "OpenCVModules-release.cmake")
-else:
-    OPENCV_SENTINEL      = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVConfig.cmake")
-    OPENCV_MODULES_CMAKE = os.path.join(OPENCV_INSTALL_DIR, "lib", "cmake", "opencv4", "OpenCVModules-release.cmake")
+#
+# TODO: ALL OPEMCV BUILD AND LINKING SHOULD BE OFFLOADED TO ANOTHER PYTHON MODULE THAT WE IMPORT HERE
+#
+
+# Sentinel: just needs to be a file cmake produces. Exact path doesn't matter
+# for correctness. It's only used as a SCons build target.
+OPENCV_SENTINEL = os.path.join(OPENCV_INSTALL_DIR, "OpenCVConfig.cmake")
 
 # OpenCV build
 def build_opencv(target, source, env):
@@ -64,7 +66,6 @@ def build_opencv(target, source, env):
         "-DWITH_GTK=OFF",
     ]
 
-    # Platform-specific flags
     if sys.platform.startswith("linux"):
         cmake_args += ["-DWITH_FFMPEG=ON", "-DWITH_V4L=ON", "-DWITH_GSTREAMER=ON"]
     elif sys.platform == "darwin":
@@ -74,7 +75,7 @@ def build_opencv(target, source, env):
             "-DWITH_FFMPEG=ON",
             "-DWITH_MSMF=ON",
             "-DWITH_DSHOW=ON",
-            "-DCMAKE_CONFIGURATION_TYPES=Release",  # configure step: restrict to Release only
+            "-DCMAKE_CONFIGURATION_TYPES=Release",
         ]
 
     if use_contrib:
@@ -100,7 +101,6 @@ def build_opencv(target, source, env):
     jobs = os.cpu_count() or 4
     print(f"Building & installing OpenCV... #cores = {jobs}")
 
-    # --config Release goes here (build step only), not in cmake_args above
     build_cmd = [
         "cmake", "--build", OPENCV_BUILD_DIR,
         "--target", "install",
@@ -117,43 +117,13 @@ def build_opencv(target, source, env):
     return 0
 
 # OpenCV cmake parser
-def parse_opencv_modules_cmake(cmake_file, build_type="release"):
-    text = Path(cmake_file).read_text()
-
-    location_key = "RELEASE" if build_type == "release" else "DEBUG"
-    lib_paths = re.findall(
-        rf'IMPORTED_LOCATION_{location_key}\s+"([^"]+)"', text)
-
-    lib_dirs  = sorted({os.path.dirname(p) for p in lib_paths})
-    lib_names = []
-    for p in lib_paths:
-        name = os.path.basename(p)
-        name = re.sub(r'^lib', '', name)          # Linux/macOS: strip 'lib' prefix
-        name = re.sub(r'\.(a|lib)$', '', name)    # strip extension
-        lib_names.append(name)
-
-    inc_raw  = re.findall(r'INTERFACE_INCLUDE_DIRECTORIES\s+"([^"]+)"', text)
-    includes = sorted({inc for m in inc_raw for inc in m.split(";") if inc})
-
-    # 3rdparty libs live alongside the opencv libs in the same dir on Windows,
-    # and in a sibling '3rdparty' subdir on Linux/macOS
-    extra_dirs = []
-    for lib_dir in lib_dirs:
-        for candidate in [
-            lib_dir,                                                  # Windows: same dir
-            os.path.join(lib_dir, "opencv4", "3rdparty"),            # Linux/macOS
-        ]:
-            if os.path.isdir(candidate) and candidate not in extra_dirs:
-                extra_dirs.append(candidate)
-
-    return includes, lib_dirs + extra_dirs, lib_names
-
 def find_opencv_modules_cmake(install_dir):
+    """Find OpenCVModules-release.cmake across all known platform layouts."""
     candidates = [
         # Linux / macOS
         os.path.join(install_dir, "lib", "cmake", "opencv4", "OpenCVModules-release.cmake"),
         os.path.join(install_dir, "share", "opencv4", "OpenCVModules-release.cmake"),
-        # Windows MSVC - everything is flat in staticlib
+        # Windows MSVC
         os.path.join(install_dir, "x64", "vc17", "staticlib", "OpenCVModules-release.cmake"),
         os.path.join(install_dir, "x64", "vc16", "staticlib", "OpenCVModules-release.cmake"),
     ]
@@ -174,20 +144,110 @@ def find_opencv_modules_cmake(install_dir):
 
     return None, None
 
-def get_opencv_3rdparty_libs(lib_dirs):
-    opencv_mod = re.compile(r'^opencv_')
-    libs = []
-    for d in lib_dirs:
-        if not os.path.isdir(d):
+
+def parse_opencv_modules_cmake(cmake_file, build_type="release"):
+    """
+    Parse OpenCVModules-release.cmake to extract include dirs, lib dirs,
+    and the authoritative ordered lib list from INTERFACE_LINK_LIBRARIES.
+    Resolves CMake's ${_IMPORT_PREFIX} variable to absolute paths.
+    """
+    text = Path(cmake_file).read_text()
+    cmake_dir = os.path.dirname(str(cmake_file))
+
+    # _IMPORT_PREFIX is relative to the cmake file.
+    # Windows path: staticlib/OpenCVModules.cmake
+    # Linux path: lib/cmake/opencv4/OpenCVModules.cmake
+    import_prefix = os.path.normpath(os.path.join(cmake_dir, "..", "..", ".."))
+
+    def resolve(s):
+        s = s.replace("${_IMPORT_PREFIX}", import_prefix)
+        s = re.sub(r'\$<[^>]+>', '', s)  # strip any CMake generator expressions
+        return s.strip()
+
+    # Lib dirs from IMPORTED_LOCATION (where the opencv .lib/.a files actually are)
+    location_key = "RELEASE" if build_type == "release" else "DEBUG"
+    lib_paths = [resolve(p) for p in re.findall(
+        rf'IMPORTED_LOCATION_{location_key}\s+"([^"]+)"', text)]
+    lib_dirs = sorted({os.path.dirname(p) for p in lib_paths if p})
+
+    # Include dirs
+    includes = []
+    for m in re.findall(r'INTERFACE_INCLUDE_DIRECTORIES\s+"([^"]+)"', text):
+        for inc in m.split(";"):
+            inc = resolve(inc)
+            if inc and inc not in includes:
+                includes.append(inc)
+
+    # INTERFACE_LINK_LIBRARIES is the authoritative ordered list of everything
+    # that needs to be linked: opencv modules + 3rdparty libs
+    iface_libs = []
+    for m in re.findall(r'INTERFACE_LINK_LIBRARIES\s+"([^"]+)"', text):
+        for lib in m.split(";"):
+            lib = resolve(lib)
+            if lib and lib not in iface_libs:
+                iface_libs.append(lib)
+
+    # Extra dirs: 3rdparty lives alongside opencv libs on Windows (same dir),
+    # or in a sibling subdir on Linux/macOS
+    extra_dirs = []
+    for lib_dir in lib_dirs:
+        for candidate in [
+            lib_dir,
+            os.path.join(lib_dir, "opencv4", "3rdparty"),
+        ]:
+            candidate = os.path.normpath(candidate)
+            if os.path.isdir(candidate) and candidate not in extra_dirs:
+                extra_dirs.append(candidate)
+
+    all_dirs = lib_dirs + [d for d in extra_dirs if d not in lib_dirs]
+    return includes, all_dirs, iface_libs
+
+
+def resolve_lib_names(lib_names, lib_dirs):
+    """
+    For each name from INTERFACE_LINK_LIBRARIES, find the actual file on disk
+    and return the name SCons should pass to the linker.
+    Handles inconsistent lib prefix conventions across platforms.
+    """
+    resolved = []
+    for name in lib_names:
+        # Absolute path: just extract the base name
+        if os.path.isabs(name):
+            base = os.path.basename(name)
+            base = re.sub(r'\.(a|lib)$', '', base)
+            if sys.platform != "win32":
+                base = re.sub(r'^lib', '', base)
+            if base and base not in resolved:
+                resolved.append(base)
             continue
-        for f in sorted(os.listdir(d)):
-            # Linux/macOS: libXXX.a     Windows: XXX.lib
-            m = re.match(r'^(?:lib)?(.+?)(?:\.a|\.lib)$', f)
-            if m and not opencv_mod.match(m.group(1)):
-                name = m.group(1)
-                if name not in libs:
-                    libs.append(name)
-    return libs
+
+        # Try variations until we find the file on disk
+        found = False
+        for d in lib_dirs:
+            for candidate_file in [
+                f"{name}.lib",
+                f"lib{name}.lib",
+                f"{name}.a",
+                f"lib{name}.a",
+            ]:
+                if os.path.isfile(os.path.join(d, candidate_file)):
+                    actual = re.sub(r'\.(a|lib)$', '', candidate_file)
+                    if sys.platform == "win32":
+                        actual = re.sub(r'^lib', '', actual)
+                    if actual not in resolved:
+                        resolved.append(actual)
+                    found = True
+                    break
+            if found:
+                break
+
+        if not found:
+            print(f"[WARN] Could not find lib file for: {name} — passing as-is")
+            if name not in resolved:
+                resolved.append(name)
+
+    return resolved
+
 
 if build_deps:
     print(f"Building OpenCV [{flavour}] into {OPENCV_INSTALL_DIR}")
@@ -208,7 +268,6 @@ if build_deps:
     Default(opencv_built)
 
 else:
-    # Re-search at runtime in case it was just built
     modules_cmake, build_type = find_opencv_modules_cmake(OPENCV_INSTALL_DIR)
     if modules_cmake is None:
         print_error(
@@ -222,7 +281,6 @@ else:
         )
         sys.exit(1)
 
-
     if not (os.path.isdir("godot-cpp") and os.listdir("godot-cpp")):
         print_error(
             "godot-cpp is not available within this folder, as Git submodules haven't been initialized.\n"
@@ -235,14 +293,15 @@ else:
     env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
     # Link OpenCV
-    cv_includes, cv_libdirs, cv_libs = parse_opencv_modules_cmake(Path(modules_cmake), build_type)
-    extra_dirs  = [d for d in cv_libdirs if "3rdparty" in d or "staticlib" in d]
-    cv_3rd_libs = get_opencv_3rdparty_libs(extra_dirs)
-    print(f"[OpenCV] modules={len(cv_libs)}  3rdparty={len(cv_3rd_libs)}  cuda={use_cuda}")
+    cv_includes, cv_libdirs, cv_libs = parse_opencv_modules_cmake(
+        Path(modules_cmake), build_type)
+    cv_libs_resolved = resolve_lib_names(cv_libs, cv_libdirs)
+
+    print(f"[OpenCV] libs={len(cv_libs_resolved)}  cuda={use_cuda}  build_type={build_type}")
 
     env.Append(CPPPATH = cv_includes)
     env.Append(LIBPATH = cv_libdirs)
-    env.Append(LIBS = cv_libs + cv_3rd_libs)
+    env.Append(LIBS    = cv_libs_resolved)
 
     # Platform system libs
     if sys.platform.startswith("linux"):
@@ -271,20 +330,29 @@ else:
 
     if env["target"] in ["editor", "template_debug"]:
         try:
-            doc_data = env.GodotCPPDocData("src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml"))
+            doc_data = env.GodotCPPDocData(
+                "src/gen/doc_data.gen.cpp", source=Glob("doc_classes/*.xml"))
             sources.append(doc_data)
         except AttributeError:
             print("Not including class reference as we're targeting a pre-4.3 baseline.")
 
     suffix = env['suffix'].replace(".dev", "").replace(".universal", "")
-    lib_filename = "{}{}{}{}".format(env.subst('$SHLIBPREFIX'), libname, suffix, env.subst('$SHLIBSUFFIX'))
+    lib_filename = "{}{}{}{}".format(
+        env.subst('$SHLIBPREFIX'), libname, suffix, env.subst('$SHLIBSUFFIX'))
 
     library = env.SharedLibrary(
         "bin/{}/{}".format(env['platform'], lib_filename),
         source=sources,
     )
-
     copy = env.Install("{}/bin/{}/".format(projectdir, env["platform"]), library)
 
     default_args = [library, copy]
+
+    # compile_commands.json for IDE integration
+    if localEnv["compiledb"]:
+        env.Tool("compilation_db")
+        cdb = env.CompilationDatabase("compile_commands.json")
+        env.Alias("compiledb", cdb)
+        default_args.append(cdb)
+
     Default(*default_args)
