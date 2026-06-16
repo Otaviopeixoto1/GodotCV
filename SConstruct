@@ -11,7 +11,7 @@ libname = "GodotCV"
 projectdir = "project"
 
 localEnv = Environment(tools=["default"], PLATFORM="")
-
+ 
 customs = ["custom.py"]
 customs = [os.path.abspath(path) for path in customs]
 
@@ -36,8 +36,8 @@ cuda_arch   = localEnv["cuda_arch_bin"]
 OPENCV_SRC         = Dir("opencv").abspath
 CONTRIB_SRC        = Dir("opencv_contrib").abspath
 flavour            = "cuda" if use_cuda else "cpu"
-OPENCV_BUILD_DIR   = Dir(f"bin/opencv_{flavour}").abspath
-OPENCV_INSTALL_DIR = Dir(f"thirdparty/opencv_{flavour}").abspath
+OPENCV_BUILD_DIR   = Dir(f"bin/opencv_{flavour}").abspath        # TODO: Is this necessary ??
+OPENCV_INSTALL_DIR = Dir(f"thirdparty/opencv_{flavour}").abspath # TODO: Move to the {PLATFORM} specific dir 
 
 #
 # TODO: ALL OPEMCV BUILD AND LINKING SHOULD BE OFFLOADED TO ANOTHER PYTHON MODULE THAT WE IMPORT HERE
@@ -146,107 +146,54 @@ def find_opencv_modules_cmake(install_dir):
 
 
 def parse_opencv_modules_cmake(cmake_file, build_type="release"):
-    """
-    Parse OpenCVModules-release.cmake to extract include dirs, lib dirs,
-    and the authoritative ordered lib list from INTERFACE_LINK_LIBRARIES.
-    Resolves CMake's ${_IMPORT_PREFIX} variable to absolute paths.
-    """
     text = Path(cmake_file).read_text()
     cmake_dir = os.path.dirname(str(cmake_file))
-
-    # _IMPORT_PREFIX is relative to the cmake file.
-    # Windows path: staticlib/OpenCVModules.cmake
-    # Linux path: lib/cmake/opencv4/OpenCVModules.cmake
     import_prefix = os.path.normpath(os.path.join(cmake_dir, "..", "..", ".."))
 
     def resolve(s):
         s = s.replace("${_IMPORT_PREFIX}", import_prefix)
-        s = re.sub(r'\$<[^>]+>', '', s)  # strip any CMake generator expressions
+        s = re.sub(r'\$<[^>]+>', '', s)
         return s.strip()
 
-    # Lib dirs from IMPORTED_LOCATION (where the opencv .lib/.a files actually are)
     location_key = "RELEASE" if build_type == "release" else "DEBUG"
     lib_paths = [resolve(p) for p in re.findall(
         rf'IMPORTED_LOCATION_{location_key}\s+"([^"]+)"', text)]
-    lib_dirs = sorted({os.path.dirname(p) for p in lib_paths if p})
 
-    # Include dirs
-    includes = []
-    for m in re.findall(r'INTERFACE_INCLUDE_DIRECTORIES\s+"([^"]+)"', text):
-        for inc in m.split(";"):
-            inc = resolve(inc)
-            if inc and inc not in includes:
-                includes.append(inc)
+    lib_dirs  = sorted({os.path.dirname(p) for p in lib_paths if p})
+    lib_names = []
+    missing   = []
 
-    # INTERFACE_LINK_LIBRARIES is the authoritative ordered list of everything
-    # that needs to be linked: opencv modules + 3rdparty libs
-    iface_libs = []
-    for m in re.findall(r'INTERFACE_LINK_LIBRARIES\s+"([^"]+)"', text):
-        for lib in m.split(";"):
-            lib = resolve(lib)
-            if lib and lib not in iface_libs:
-                iface_libs.append(lib)
-
-    # Extra dirs: 3rdparty lives alongside opencv libs on Windows (same dir),
-    # or in a sibling subdir on Linux/macOS
-    extra_dirs = []
-    for lib_dir in lib_dirs:
-        for candidate in [
-            lib_dir,
-            os.path.join(lib_dir, "opencv4", "3rdparty"),
-        ]:
-            candidate = os.path.normpath(candidate)
-            if os.path.isdir(candidate) and candidate not in extra_dirs:
-                extra_dirs.append(candidate)
-
-    all_dirs = lib_dirs + [d for d in extra_dirs if d not in lib_dirs]
-    return includes, all_dirs, iface_libs
-
-
-def resolve_lib_names(lib_names, lib_dirs):
-    """
-    For each name from INTERFACE_LINK_LIBRARIES, find the actual file on disk
-    and return the name SCons should pass to the linker.
-    Handles inconsistent lib prefix conventions across platforms.
-    """
-    resolved = []
-    for name in lib_names:
-        # Absolute path: just extract the base name
-        if os.path.isabs(name):
-            base = os.path.basename(name)
-            base = re.sub(r'\.(a|lib)$', '', base)
-            if sys.platform != "win32":
-                base = re.sub(r'^lib', '', base)
-            if base and base not in resolved:
-                resolved.append(base)
+    for p in lib_paths:
+        if not p:
             continue
+        name = os.path.basename(p)
+        name = re.sub(r'\.(a|lib)$', '', name)
 
-        # Try variations until we find the file on disk
-        found = False
-        for d in lib_dirs:
-            for candidate_file in [
-                f"{name}.lib",
-                f"lib{name}.lib",
-                f"{name}.a",
-                f"lib{name}.a",
-            ]:
-                if os.path.isfile(os.path.join(d, candidate_file)):
-                    actual = re.sub(r'\.(a|lib)$', '', candidate_file)
-                    if sys.platform == "win32":
-                        actual = re.sub(r'^lib', '', actual)
-                    if actual not in resolved:
-                        resolved.append(actual)
-                    found = True
-                    break
-            if found:
-                break
+        if os.path.isfile(p):
+            lib_names.append(name)
+        else:
+            missing.append((name, p))
 
-        if not found:
-            print(f"[WARN] Could not find lib file for: {name} — passing as-is")
-            if name not in resolved:
-                resolved.append(name)
+    if missing:
+        print(f"[OpenCV][WARN] {len(missing)} libs listed in cmake but not found on disk:")
+        for name, path in missing:
+            print(f"  MISSING: {name}  (expected at {path})")
+        print("[OpenCV][WARN] These will be skipped. If linking fails, check your OpenCV build.")
 
-    return resolved
+    includes = []
+    for candidate in [
+        os.path.join(import_prefix, "include", "opencv4"),
+        os.path.join(import_prefix, "include"),
+    ]:
+        if os.path.isdir(candidate):
+            includes.append(candidate)
+
+    print(f"[OpenCV] import_prefix : {import_prefix}")
+    print(f"[OpenCV] lib_dirs      : {lib_dirs}")
+    print(f"[OpenCV] includes      : {includes}")
+    print(f"[OpenCV] libs          : {lib_names}")
+
+    return includes, lib_dirs, lib_names
 
 
 if build_deps:
@@ -293,15 +240,12 @@ else:
     env = SConscript("godot-cpp/SConstruct", {"env": env, "customs": customs})
 
     # Link OpenCV
-    cv_includes, cv_libdirs, cv_libs = parse_opencv_modules_cmake(
-        Path(modules_cmake), build_type)
-    cv_libs_resolved = resolve_lib_names(cv_libs, cv_libdirs)
-
-    print(f"[OpenCV] libs={len(cv_libs_resolved)}  cuda={use_cuda}  build_type={build_type}")
+    cv_includes, cv_libdirs, cv_libs = parse_opencv_modules_cmake(Path(modules_cmake), build_type)
+    print(f"[OpenCV] libs={len(cv_libs)}  cuda={use_cuda}  build_type={build_type}")
 
     env.Append(CPPPATH = cv_includes)
     env.Append(LIBPATH = cv_libdirs)
-    env.Append(LIBS    = cv_libs_resolved)
+    env.Append(LIBS    = cv_libs)
 
     # Platform system libs
     if sys.platform.startswith("linux"):
