@@ -261,6 +261,7 @@ else:
         env.Append(LIBS=[
             "ws2_32", "comctl32", "gdi32",
             "ole32", "setupapi", "vfw32",
+            "ippicvmt", #ippicv for windows
         ])
 
     if use_cuda:
